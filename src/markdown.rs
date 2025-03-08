@@ -136,7 +136,9 @@ fn pull_elements<'a, 'b: 'a>(
     cx: &'a mut Context<'b>,
 ) -> impl Iterator<Item = Element> + use<'a, 'b> {
     std::iter::from_fn(move || {
-        Some(match iter.next()? {
+
+        let tmp = iter.next();
+        Some(match tmp? {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {
                     rsx! { p { {pull_elements(iter, cx)} } }
@@ -407,9 +409,11 @@ fn pull_elements<'a, 'b: 'a>(
                 }
             }
             Event::SoftBreak => {
-                rsx! { br {} }
+                println!("soft break");
+                rsx! { "\n" }
             }
             Event::HardBreak => {
+                println!("hard break");
                 rsx! { br {} }
             }
             Event::Rule => {
@@ -444,18 +448,62 @@ impl MarkdownRenderer {
         renderer
     }
 
-    pub fn update_content(&mut self, content: String) -> () {
-        self.content = content;
+    fn split_into_paragraphs(&self, markdown: &str) -> Vec<String> {
+        let mut paragraphs = Vec::<String>::new();
+        let mut current = String::new();
+        let mut in_code_block = false;
+
+        for line in markdown.split("\r\n") {
+            
+
+            if !line.is_empty() {
+
+                current.push_str(line);
+                
+                if line.ends_with(" "){
+                    current.push_str("\u{a0}");
+                }
+
+                
+                paragraphs.push(current.to_string().clone());
+                paragraphs.push("\n".to_string());
+            } else {
+                paragraphs.push(String::from("\\\n"));
+            }
+
+            current.clear();
+        }
+        println!("{:?}", paragraphs);
+        paragraphs
     }
 
     /// Renders the parsed elements into Dioxus-compatible elements.
     pub fn render_to_elements(&mut self) -> () {
         let content_read = self.content.clone();
 
-        let mut parser = Parser::new(&content_read);
-        let mut cx = Context::new();
-        let elements = pull_elements(&mut parser, &mut cx);
+        // let content_read = self.split_into_paragraphs(&content_read);
+        println!("markdown {:?}", content_read);
 
-        self.nodes = elements.collect();
+        let vect_of_strings = self.split_into_paragraphs(&content_read);
+        let mut all_nodes = Vec::new();
+        let mut cx = Context::new();
+        for paragraph in &vect_of_strings {
+            let mut parser = Parser::new(&paragraph);
+
+            let elements = if paragraph == "\\\n" {
+                // Convert RSX br to Node::HardBreak
+                vec![ rsx! {  p { br {} "\u{a0}"} }] // Replace with rsx! conversion if needed
+            } else {
+                let pull_vec: Vec<Result<VNode, RenderError>> = pull_elements(&mut parser, &mut cx).collect();
+                // pull_vec.push( rsx! {  p {"\u{a0}"} });
+                pull_vec
+            };
+            all_nodes.extend(elements);
+        }
+        self.nodes = all_nodes;
+
+        // let mut parser = Parser::new(&content_read);
+        // let mut cx = Context::new();
+        // let elements = pull_elements(&mut parser, &mut cx);
     }
 }
