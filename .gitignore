@@ -2,3 +2,7 @@ target/
 target
 target/*
 main_copy.rs
+
+.vscode
+.vscode/settings.json
+.vscode/*

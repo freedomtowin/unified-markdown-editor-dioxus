@@ -2,7 +2,7 @@
 use std::ops::{Deref, DerefMut};
 use dioxus::prelude::*;
 use crate::state;
-use crate::markdown;
+// use crate::markdown;
 
 use state::State;
 /// A “builder” struct that owns the `State`. You can add extra fields, too.
@@ -30,43 +30,111 @@ impl DerefMut for EditorBuilder {
 }
 
 impl EditorBuilder {
-    /// Create a new EditorBuilder. Must be called from within a Dioxus component,
-    /// so we can pass `cx: &ScopeState` to `State::new(cx)`.
-    
+    /// Creates a new EditorBuilder with the given UCI coroutine and state.
     pub fn new(uci_action_tx: Option<Coroutine<String>>, state: State) -> Self {
         println!("{:?}", "New Editor");
         Self {
             uci_action_tx,
-            state: state,
+            state,
         }
     }
 
-    pub fn get_raw_text(&self) -> String {
-        self.deref().raw_text.read().clone()
+    /// Returns the raw text as a single concatenated string, joining all div texts with spaces.
+    // pub fn get_raw_text(&self) -> String {
+    //     self.state.raw_text.join(" ")
+    // }
+
+    /// Returns a reference to the raw text vector.
+    pub fn get_raw_text_vec(&self) -> &Vec<Vec<String>> {
+        &self.state.raw_text
     }
 
-    pub fn get_selection_range(&self) -> Option<(usize, usize)> {
-        self.deref().selection_range.read().clone()
+    // pub fn get_text_at(&self, index_i) -> String {
+    //     if let Some((index_i, index_j, _)) = self.get_caret_pos() {
+    //         self.state.raw_text[index_i][index_j].to_string()
+    //     }
+    //     else {
+    //         String::from("error")
+    //     }
+    // }
+
+    pub fn get_raw_text_current(&self) -> String {
+        if let Some((index_i, index_j, _)) = self.get_caret_pos() {
+            self.state.raw_text[index_i][index_j].to_string()
+        }
+        else {
+            String::from("error")
+        }
     }
 
-
-    /// Convenience function to set caret position (calls `state.set_caret()`).
-    pub fn get_caret_position(&self) -> Option<usize> {
-        self.deref().caret_pos.read().clone()
+    /// Updates the text at the specified index and adjusts the caret position if necessary.
+    pub fn update_text(&mut self, index_i: usize, index_j: usize, text: String) {
+        self.state.update_text(index_i, index_j, text);
     }
 
-    /// Convenience function to set caret position (calls `state.set_caret()`).
-    pub fn set_caret_position(&mut self, new_pos: usize) {
-        self.deref_mut().set_caret(new_pos)
+    /// Moves the caret to the specified position in the given text index.
+    pub fn move_caret(&mut self, index_i: usize, index_j: usize, char_pos: usize) {
+        self.state.move_caret(index_i, index_j, char_pos);
     }
 
-
-    pub fn handle_keydown_event(&mut self, evt: KeyboardEvent){
-
-        self.deref_mut().handle_keydown(evt);
-        println!("Test");
+    /// Clears the caret position, setting it to None.
+    pub fn clear_caret(&mut self) {
+        self.state.clear_caret();
     }
 
-    // Add other builder/utility methods here...
+    /// Returns the current caret position.
+    pub fn get_caret_pos(&self) -> Option<(usize, usize, usize)> {
+        self.state.caret_pos
+    }
+
+    /// Sends a command to the UCI engine via the coroutine, if available.
+    pub fn send_uci_command(&self, command: &str) {
+        if let Some(tx) = &self.uci_action_tx {
+            tx.send(command.to_string());
+        }
+    }
+
+    pub fn get_row_level_caret_pos(&self, current_caret_pos: Option<(usize, usize, usize)>) -> Option<usize> {
+        if let Some((index_i, index_j, char_pos)) = current_caret_pos {
+            let row = &self.state.raw_text[index_i];
+            // Sum lengths of all texts in columns before index_j
+            let mut total_pos = 0;
+            for j in 0..index_j {
+                total_pos += row[j].len();
+            }
+            // Add the current cursor position
+            total_pos += char_pos;
+            Some(total_pos)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_caret_from_row_level_pos(&self, row_level_pos: usize, index_i: usize, row: Vec<String>) -> Option<(usize, usize, usize)> {
+        // if index_i >= self.state.raw_text.len() {
+        //     return None; // Invalid row index
+        // }
+    
+        // let row = &self.state.raw_text[index_i];
+        let mut remaining_pos = row_level_pos;
+    
+        for index_j in 0..row.len() {
+            let text_len = row[index_j].len();
+            if remaining_pos < text_len {
+                // The position falls within this column
+                return Some((index_i, index_j, remaining_pos + 1));
+            }
+            remaining_pos -= text_len;
+        }
+    
+        // If the position exceeds the total length of the row, return the last column's end
+        if !row.is_empty() {
+            let last_j = row.len() - 1;
+            let last_text_len = row[last_j].len();
+            Some((index_i, last_j, last_text_len))
+        } else {
+            None // Empty row
+        }
+    }
+
 }
-

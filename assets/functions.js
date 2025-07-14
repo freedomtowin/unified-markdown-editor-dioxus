@@ -129,7 +129,6 @@ function getTotalTextLength(node) {
 
 
 
-// Find the text node and offset corresponding to the given position
 function findTextNodeAndOffset(node, pos) {
     let stack = [node];
     let offset = 0;
@@ -162,6 +161,12 @@ function findTextNodeAndOffset(node, pos) {
                 }
             }
 
+            // Check if the current text node is inside a <strong> tag
+            if (current.parentElement.tagName === 'STRONG') {
+                // Increment the offset by 2 for <strong> tags
+                offset -= 2;
+            }
+
             if (offset + textLength >= pos) {
                 return { node: current, offset: pos - offset };
             }
@@ -175,5 +180,5 @@ function findTextNodeAndOffset(node, pos) {
         }
     }
     // If no text node is found, return the element itself with offset 0
-    return { node: el, offset: 0 };
+    return { node: node, offset: 0 };
 }

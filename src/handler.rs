@@ -1,3 +1,5 @@
+use dioxus::prelude::Key;
+
 pub fn handle_backspace_no_selection(read_text: &str, pos: usize) -> (String, usize) {
     if pos > 0 && pos < read_text.len() && &read_text[pos - 1..pos + 1] == "\r\n" {
         // Case: Caret is between `\r\n`, delete both
@@ -18,20 +20,23 @@ pub fn handle_backspace_no_selection(read_text: &str, pos: usize) -> (String, us
     (read_text.to_string(), pos)
 }
 
-pub fn handle_character_input(read_text: &str, pos: usize, ch: &String) -> (String, usize) {
-    let (left, right) = read_text.split_at(pos);
-    
-    // If inserting a space and the left side ends with a space, convert to &nbsp;
-    let new_char = if ch == " " && left.ends_with(' ') {
-        " ".to_string()
-    } else {
-        ch.to_string()
-    };
+pub fn handle_character_input(current_text: &str, current_caret_pos: usize, key: Key) -> (String, usize) {
+    let mut new_text = current_text.to_string();
+    let mut new_caret_pos = current_caret_pos;
 
-    let new_text = format!("{}{}{}", left, new_char, right);
-    let updated_pos = pos + new_char.len(); // Move caret correctly
+    if let Key::Character(ch) = &key
+    {
+        // Insert the character at the caret position
+        let char_str = key.to_string();
+        new_text.insert_str(current_caret_pos, &char_str);
+        new_caret_pos += char_str.len();
+    } else if key == Key::Backspace && current_caret_pos > 0 {
+        // Remove the character before the caret
+        new_text.remove(current_caret_pos - 1);
+        new_caret_pos -= 1;
+    }
 
-    (new_text, updated_pos)
+    (new_text, new_caret_pos)
 }
 
 

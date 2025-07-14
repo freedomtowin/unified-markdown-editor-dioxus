@@ -1,0 +1,27 @@
+.highlight {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+
+  .base-paragraph {
+    /* display: table; */
+    margin: 0;
+    padding: 0px;
+    border: 1px solid #ccc;
+    resize: none;
+    overflow: hidden;
+    line-height: 1.2;
+    min-height: 22px;
+    box-sizing: border-box;
+    font-size: 16px;
+    font-family: 'CqMono';
+    min-width: fit-content;
+    display: inline-block;
+    /* white-space: nowrap; */
+    white-space: pre-wrap;
+  }
+
+.base-paragraph:focus {
+    outline: none;
+    /* or border: none; */
+  }
