@@ -43,6 +43,11 @@ pub async fn measure_width_coroutine(mut rx: UnboundedReceiver<(usize, usize, St
 
                     // let row_size = editor.read().text_width.len();
 
+                    while index_i >= editor.read().text_width.len() {
+                        // editor.write().text_width
+                        editor.write().text_width.push(vec![None]);
+                    }
+
                     while index_j >= editor.read().text_width[index_i].len() {
                         // editor.write().text_width
                         editor.write().text_width[index_i].push(None);
@@ -122,7 +127,7 @@ pub async fn update_editor_text_coroutine(mut rx: UnboundedReceiver<(usize, usiz
 
                     let element_id = get_element_id(index_i, index_j);
                     let text_b64 = general_purpose::STANDARD.encode(new_text.clone());
-        
+                
                     let js = format!(
                         r#"
                         return window.clearElementTextWithPosition('{}', atob("{}"), {});
@@ -138,6 +143,7 @@ pub async fn update_editor_text_coroutine(mut rx: UnboundedReceiver<(usize, usiz
         
                     editor.write().move_caret(index_i, index_j , cursor_pos);
 
+                    println!("[update_editor_text_coroutine] index i {} index j {} cursor {} text {}", index_i, index_j, cursor_pos, new_text.clone());
             }
             Ok(None) => {
                 // No messages available, wait for a short time before trying again
