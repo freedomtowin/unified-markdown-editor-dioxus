@@ -107,7 +107,7 @@ fn App() -> Element {
         loop {
             tokio::time::sleep(Duration::from_micros(100)).await;
             if (*editor_updates.read()).len() > 0 {
-                println!("updates available");
+                
                 if let Some((index_i, index_j, pos, text)) = (*editor_updates.write()).pop_front() {        
    
 
@@ -262,50 +262,31 @@ fn App() -> Element {
         if event.key() == Key::Enter {
             event.stop_propagation();
             event.prevent_default();
-            spawn(async move {
-                // tokio::time::sleep(Duration::from_millis(100)).await;
-                editor.with_mut(|e| {
-                    let (caret_i, caret_j, caret_pos) = e.get_caret_pos().unwrap_or((index_i, index_j, 0));
-                    if caret_i == index_i && caret_j == index_j {
-                        let current_text = e.raw_text[index_i][index_j].clone();
 
-                        let (before, after) = current_text.split_at(caret_pos);
+            let _ = handler::handle_enter_key(event, index_i, index_j, &editor, measure_width, editor_updates);
+        //     spawn(async move {
+        //         // tokio::time::sleep(Duration::from_millis(100)).await;
+        //         editor.with_mut(|e| {
+        //             let (caret_i, caret_j, caret_pos) = e.get_caret_pos().unwrap_or((index_i, index_j, 0));
+        //             if caret_i == index_i && caret_j == index_j {
+        //                 let current_text = e.raw_text[index_i][index_j].clone();
 
-                        e.update_text(index_i, index_j, before.to_string());
-                        e.raw_text[index_i].insert(index_j + 1, after.to_string());
+        //                 let (before, after) = current_text.split_at(caret_pos);
 
-                        // let current_text = e.raw_text[index_i][index_j].clone();
-                        // let (before, after) = current_text.split_at(caret_pos);
+        //                 e.update_text(index_i, index_j, before.to_string());
+        //                 e.raw_text.insert(index_i+1, vec![after.to_string()]);
                         
-                        // e.update_text(index_i, index_j, before.to_string());
-                        // // Create a new row with the same number of columns as the current row
-                        // let num_cols = e.raw_text[index_i].len();
-                        // let mut new_row = vec!["".to_string(); num_cols];
-                        // new_row[0] = after.to_string();
-                        // e.raw_text.insert(index_i + 1, new_row);                        
+        //                 measure_width.send((index_i, index_j, before.to_string()));
+        //                 measure_width.send((index_i, index_j + 1, after.to_string()));
 
-
-                        if index_i < e.text_width.len() {
-                            e.text_width[index_i].push(None);
-                        } else {
-                            e.text_width.push(vec![None]);
-                        }
-
-                        // let flat_index = e.raw_text.iter().take(index_i).map(|inner| inner.len()).sum::<usize>() + index_j;
-
-                        // e.text_width.push(None);
-                        // e.text_width[flat_index] = None;
+        //                 // update_editor_text.send((index_i, index_j, before.len(), before.to_string()));
+        //                 // update_editor_text.send((index_i + 1, 0, after.len(), after.to_string()));
+        //                 editor_updates.write().push_back((index_i, index_j, before.len(), before.to_string()));
+        //                 editor_updates.write().push_back((index_i + 1, 0, after.len(), after.to_string()));
                         
-                        measure_width.send((index_i, index_j, before.to_string()));
-                        measure_width.send((index_i, index_j + 1, after.to_string()));
-
-                        update_editor_text.send((index_i, index_j, before.len(), before.to_string()));
-                        update_editor_text.send((index_i, index_j + 1, 0, after.to_string()));
-                        
-                        
-                    }
-                });
-        });
+        //             }
+        //         });
+        // });
         } else if event.key() == Key::ArrowLeft {
 
             println!("[left arrow] current text {}, len {}", cur_text, cur_text.len());
@@ -371,7 +352,7 @@ fn App() -> Element {
 
     
             spawn(async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                // tokio::time::sleep(Duration::from_millis(100)).await;
 
                 
                 let (current_index_i, current_index_j, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 0));
@@ -392,11 +373,11 @@ fn App() -> Element {
             
                             editor.with_mut(|e| {
                                 
-                                let (new_index_i, new_index_j, new_pos) = if (current_caret_pos >= current_text_len) && (index_j < current_col_size) {
+                                let (new_index_i, new_index_j, new_pos) = if (current_caret_pos > current_text_len) && (index_j < current_col_size) {
                                     // If the is a previous cell in the same row 
                                     (index_i, index_j + 1, 0)
             
-                                } else if (current_caret_pos >= current_text_len) && (index_j == current_col_size) && (index_i < current_row_size){
+                                } else if (current_caret_pos > current_text_len) && (index_j == current_col_size) && (index_i < current_row_size){
                                     // If there is a next row
                                     let next_i = index_i + 1;
                                     let next_j = 0;
@@ -492,6 +473,8 @@ fn App() -> Element {
             tokio::time::sleep(Duration::from_millis(1)).await;
             let input_text = editor.read().raw_text.clone();
         
+            // let editor_pos = get_editor_caret_position(index_i, index_j).await;
+
             let maybe_current_caret = editor.read().get_caret_pos();
             let row_level_caret_pos = editor.read().get_row_level_caret_pos(maybe_current_caret);
     
@@ -507,9 +490,11 @@ fn App() -> Element {
             // assert_eq!(input_text, raw_text);
             // editor.write().raw_text = raw_text.clone();
     
-            println!("current caret: {:?}", maybe_current_caret);
+            
             if let Some((cur_index_i, cur_index_j, cur_caret_pos)) = maybe_current_caret {
 
+                println!("[update syntax] index i {} index j {} cursor {}", cur_index_i, cur_index_j, cur_caret_pos);
+                
                 if cur_index_i >= editor.read().text_width.len() {
                     editor.write().text_width.push(vec![None]);
                 }           
@@ -545,10 +530,6 @@ fn App() -> Element {
                 //     editor.write().raw_text[cur_index_i][index_j] = col.clone();
                 //    }
                 // }
-
-
-
-
                 
                 measure_width.send((cur_index_i, cur_index_j, cur_text.to_string()));                
 
@@ -595,74 +576,6 @@ fn App() -> Element {
         syntax_text
     });
 
-    // let iter_format_cell = move |row: usize, col: usize, num_cols: usize, text: String| {
-
-    //     let flat_index = editor.read().raw_text.iter().take(row).map(|inner| inner.len()).sum::<usize>() + col;
-    //     let width = editor.read().text_width[flat_index].map_or("auto".to_string(), |w| format!("{}px", w));
-    //     let width = editor.read().text_width[flat_index];
-
-    //     // let text = (*text).clone();
-    //     let element_id = format!("textarea-{}-{}", row, col);
-
-    //     // let cell_style = compute_style(
-    //     //     CellInfo {
-    //     //         row: row,
-    //     //         col: col,
-    //     //         num_cols: num_cols,
-    //     //         width: width
-    //     //     }
-    //     // );
-
-    //     let cell_style = compute_style(
-    //         CellInfo {
-    //             row: row,
-    //             col: col,
-    //             num_cols: num_cols,
-    //             width: width,
-    //         }
-    //     );
-
-    //     // let text = attrs.text.clone();
-
-    //     // let cell_style = compute_markdown_style_string(attrs); 
-
-    //     rsx! {
-    //         div {
-    //             id: element_id.clone(),
-    //             contenteditable: !(is_mouse_dragging.read().clone()),
-    //             class: "base-paragraph",
-    //             style: cell_style,
-
-    //             onkeydown: move |event| {
-    //                 if (*editor_updates.read()).len() < 20 { 
-    //                     handle_keydown_input(event, row, col);
-    //                 }
-    //                 // spawn(async move {
-    //                 //     let _ = update_text_from_div(&mut editor, row, col, element_id.as_str()).await;
-    //                 // });   
-    //             },
-    //             onmousedown: move |event| { is_mouse_down.set(true) },
-    //             onmousemove: move |event| {
-    //                 if *is_mouse_down.read() {
-    //                     is_mouse_dragging.set(true);
-    //                 }
-    //             },
-    //             onmouseup: move |event| {
-    //                 is_mouse_down.set(false);
-    //                 is_mouse_dragging.set(false);
-    //             },
-    //             onclick: move |_| {
-    //                 focus_caret_position.send((row, col));
-    //             },
-    //             if text.len() > 0 {
-    //                 "{text}"
-    //             }
-    //             else  {
-    //                 ""
-    //             }
-    //         }
-    //     }
-    // };
 
     let iter_format_cell = move |row: usize, col: usize, num_cols: usize, text: MarkDownElements| {
 
@@ -671,7 +584,16 @@ fn App() -> Element {
         
         // let width = editor.read().text_width[flat_index].map_or("auto".to_string(), |w| format!("{}px", w));
         
-        let width = editor.read().text_width[row][col];
+        let width = if row > editor.read().text_width.len() - 1 {
+            None
+        }
+        else if col > editor.read().text_width[row].len() - 1 {
+            None
+        }
+        else {
+            editor.read().text_width[row][col]
+        };
+        
 
         // let text = (*text).clone();
         let element_id = format!("textarea-{}-{}", row, col);
@@ -702,6 +624,12 @@ fn App() -> Element {
                         handle_keydown_input(event, row, col);
                     }
                     spawn(async move {
+
+                        while (*editor_updates.read()).len() > 0 {
+                            println!("waiting for updates {}", (*editor_updates.read()).len());
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                         let _ = update_syntax().await;
                     });   
                 },
@@ -732,6 +660,7 @@ fn App() -> Element {
         document::Link { href: asset!("/assets/editor.css"), rel: "stylesheet"}
         div {
             style: "display: flex; flex-direction: column;",
+            id: "container",
             {
                 renderer().iter().enumerate().map(|(row, inner)| {
                     // println!("rerendered");
@@ -782,321 +711,3 @@ pub fn compute_style(props: CellInfo) -> String {
         format!("flex-grow: 0; font-weight: bold; width: {};", width)
     }
 }
-
-// static FUNCTIONS_JS: Asset = asset!("/assets/functions.js");
-  
-// fn main() {
-//     dioxus::LaunchBuilder::desktop()
-//         .with_cfg(Config::new()
-//             .with_window(WindowBuilder::new()
-//                 .with_title("Probably Crater")    
-//                 .with_inner_size(LogicalSize::new(490, 530))
-//                 .with_min_inner_size(LogicalSize::new(600, 500))
-//                 .with_resizable(true)
-//             ))
-//         .launch(App)
-// }
-
-// #[component]
-// fn App() -> Element {
-
-//     let raw_text = use_signal(|| "# First line\n\n# Second line\n\nTest\n".replace("\n\n","\r\n").to_string());
-//     let caret_pos = use_signal(|| None::<usize>);
-//     let undo_stack = use_signal(|| Vec::<String>::new());
-//     let selection_range = use_signal(|| None::<(usize, usize)>);
-//     let last_key_entered = use_signal(|| None::<Key>);
-
-//     let functions_js = use_memo(move || {
-//         read_file_or_fallback(
-//             FUNCTIONS_JS.resolve(), 
-//             FUNCTIONS_JS.bundled().absolute_source_path().into()
-//         ).unwrap()
-//     });
-
-
-
-//     // use_context_provider(|| Signal::new(EditorBuilder::new(Some(uci_tx))));
-//     let uci_tx = use_coroutine(|mut rx: UnboundedReceiver<String>| async move {
-        
-//         while let  Ok(Some(msg)) = rx.try_next() {
-//             debug!("Editor reports: {msg}");
-//         }
-//     });
-
-//     // let mut move_builder = use_context::<Signal<EditorBuilder>>();
-//     let mut move_editor = use_signal(|| {
-
-//         let state = State::new(
-//             raw_text.clone(),
-//             caret_pos.clone(),
-//             undo_stack.clone(),
-//             selection_range.clone(),
-//             last_key_entered.clone()
-//         );
-//         EditorBuilder::new(Some(uci_tx), state)
-//     });
-
-
-//     // Coroutine that listens for new caret positions and updates the DOM selection.
-//     let caret_queue = use_coroutine(move |mut rx: UnboundedReceiver<usize>| async move {
-
-        
-//         loop {
-//             // Try to receive a message
-//             match rx.try_next() {
-//                 Ok(Some(pos)) => {
-//                     let js_code = functions_js();
-//                     let js_code_preview = format!("{} return copyPreviewToEditor()", &js_code);
-    
-//                     tokio::time::sleep(Duration::from_millis(10)).await;
-
-//                     if let Ok(js_result) = document::eval(&js_code_preview).await {
-//                         println!("inner html: {:?}", js_result);
-//                     }
-                    
-//                     tokio::time::sleep(Duration::from_millis(10)).await;
-
-//                     let last_key = (*move_editor.read()).last_key_entered.read().clone();
-
-//                     let mut last_key_was_enter = false;
-//                     if last_key == Some(Key::Enter) {
-//                         last_key_was_enter = true;
-//                     }
-                    
-//                     // println!("caret que {:?}", pos);
-
-                    
-//                     let js_code_cursor = format!("{} return insertCursorAtPosition({}, {})", &js_code, pos, last_key_was_enter);
-
-//                     // Introduce a small delay so the DOM can be updated first
-//                     // tokio::time::sleep(Duration::from_millis(10)).await;
-                    
-//                     document::eval(&js_code_cursor).await.ok();
-//                 }
-//                 Ok(None) => {
-//                     // No messages available, wait for a short time before trying again
-//                     tokio::time::sleep(Duration::from_millis(10)).await;
-//                 }
-//                 Err(_) => {
-//                     tokio::time::sleep(Duration::from_millis(10)).await;
-//                     // Channel is closed, exit the loop
-//                     // println!("Channel closed");
-//                     // break;
-//                 }
-//             }
-//         }
-//     });
-
-
-
-
-//     let transfer_input = use_coroutine(move |mut rx: UnboundedReceiver<String>| {
-//         async move {
-//             println!("Coroutine is running");
-    
-//             loop {
-//                 // Try to receive a message
-//                 match rx.try_next() {
-//                     Ok(Some(message)) => {
-//                         let js_code = functions_js();
-//                         let js_code = format!("{} return copyPreviewToEditor()", &js_code);
-    
-                        
-//                         if let Ok(js_result) = document::eval(&js_code).await {
-//                             println!("inner html: {:?}", js_result);
-//                         //     let new_text = js_result.as_str()
-//                         //         .unwrap_or_default()
-//                         //         .replace('\u{200b}', "");  // Remove zero-width spaces
-//                         //     println!("updating view: {:?}", new_text);
-//                         //     let raw_text_read = move_editor.read().raw_text.read().clone();
-//                         //     if !new_text.is_empty() && new_text != raw_text_read {
-//                         //         move_editor.write().raw_text.set(new_text.to_string());
-//                         //     }
-//                         }
-//                     }
-//                     Ok(None) => {
-//                         // No messages available, wait for a short time before trying again
-//                         tokio::time::sleep(Duration::from_millis(20)).await;
-//                     }
-//                     Err(_) => {
-//                         tokio::time::sleep(Duration::from_millis(20)).await;
-//                         // Channel is closed, exit the loop
-//                         // println!("Channel closed");
-//                         // break;
-//                     }
-//                 }
-//             }
-    
-//             println!("Coroutine finished");
-//         }
-//     });
-
-    
-
-//     let caret_click = use_coroutine(move |mut rx: UnboundedReceiver<String>| {
-//         async move {
-//             println!("Coroutine is running");
-    
-//             loop {
-//                 // Try to receive a message
-//                 match rx.try_next() {
-//                     Ok(Some(message)) => {
-
-//                         let js_code = functions_js();
-//                         let js_code = format!("{} return getCaretClickPosition()", &js_code);
-//                         // println!("{}", js_code);
-//                         if let Err(e) = document::eval(&js_code).await {
-//                             println!("JS eval error: {:?}", e); // Add this line
-//                         } else if let Ok(result) = document::eval(&js_code).await {
-//                             if let Ok(pos) = result.to_string().parse::<usize>() {
-//                                 println!("click {:?}", pos);
-//                                 move_editor.write().set_caret(pos);
-//                             }
-//                         }
-//                     }
-//                     Ok(None) => {
-//                         // No messages available, wait for a short time before trying again
-//                         tokio::time::sleep(Duration::from_millis(10)).await;
-//                     }
-//                     Err(_) => {
-//                         tokio::time::sleep(Duration::from_millis(10)).await;
-//                         // Channel is closed, exit the loop
-//                         // println!("Channel closed");
-//                         // break;
-//                     }
-//                 }
-//             }
-    
-//             println!("Coroutine finished");
-//         }
-//     });
-
-//     //   let _sync_task = use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
-//     //     loop {
-//     //         // let js_code = functions_js();
-//     //         // let js_code = format!("{} return copyPreviewToEditor()", &js_code);
-
-            
-//     //         // if let Ok(js_result) = document::eval(&js_code).await {
-//     //         //     println!("inner html: {:?}", js_result);
-//     //         // }
-
-//     //         let car = *(*move_editor.read()).caret_pos.read();
-//     //         if let Some(pos) = car {
-//     //             caret_queue.send(pos);
-//     //         }
-//     //         tokio::time::sleep(Duration::from_millis(100)).await;
-//     //     }
-//     // });
-
-
-
-//     let renderer = use_memo(move || {
-//         let mut renderer = MarkdownRenderer::new(move_editor.read().get_raw_text());
-//         renderer.render_to_elements();
-//         renderer
-//     });
-
-//     rsx! {
-//         div {
-//             style: "display: flex; gap: 20px; padding: 10px;",
-
-//             // Editor Pane: A contenteditable div showing the raw markdown text.
-//             div {
-//                 style: "flex: 1; border: 1px solid #ccc; padding: 1px; height: 60%",
-//                 h3 { "Editor (Content Editable)" }
-//                 // The contenteditable div uses an id ("editor") for JS interop.
-//                 div {
-//                     id: "editor",
-//                     contenteditable: "true",
-//                     style: "overflow-y: auto;  border: 1px solid #aaa; padding: 8px;",
-//                     onkeydown: move |evt| {
-
-                        
-//                         let mut handler = move_editor.write();
-
-
-                        
-//                         handler.handle_keydown(evt);
-                    
-//                         // let car = *handler.caret_pos.read();
-//                         // if let Some(pos) = car {
-//                         //     caret_queue.send(pos);
-//                         // }      
-//                         // transfer_input.send("update".to_string());
-
-//                         let car = *handler.caret_pos.read();
-//                         if let Some(pos) = car {
-//                             caret_queue.send(pos);
-//                         }
-                        
-                        
-//                     },
-//                     oninput: move |_| {
-                        
-//                         // .raw_text.read().clone()
-//                         // move_editor.write().handle_input();
-//                     },
-//                     onmouseup: move |_| {
-//                         println!("Sending click event"); // Debug print
-//                         caret_click.send("click".to_string());
-
-//                     },
-//                     onclick: move |_| {
-//                         caret_click.send("click".to_string());
-
-//                     },
-//                     // Here we simply display the raw text.
-//                     // In a more advanced version you might run a syntax highlighter
-//                     // to wrap tokens in spans for color/styling.
-
-//                     { renderer().nodes.clone().into_iter() }
-          
-//                 }
-//             },
-
-//             // Preview Pane: A read-only live preview rendered using MarkdownRenderer.
-//             div {
-//                 id: "preview",
-                
-//                 style: "display: none; flex: 1; border: 1px solid #ccc; padding: 8px; white-space: pre-wrap;",
-//                 { renderer().nodes.clone().into_iter() }
-//                 // ""
-//             }
-//         },
-//         // Debug info: show raw state and caret position.
-//         div {
-//             style: "margin-top: 1em; font-family: monospace;",
-//             "Raw Text: ",
-//             pre { {format!("{}", move_editor.read().raw_text.clone())} },
-//             "Caret Position: ",
-//             {
-//             if let Some(pos) = move_editor.read().get_caret_position() {
-//                 rsx!{ "{pos}" }
-//             } else {
-//                 rsx!{ "None" }
-//             }}
-//             br {},
-//             "Selection Range: ",
-//             {
-//                 if let Some((start, end)) = move_editor.read().get_selection_range() {
-//                     rsx! { "Start: {start}, End: {end}" }
-//                 } else {
-//                     rsx! { "None" }
-//                 }
-//             }            
-//         }
-//     }
-// }
-
-
-// fn read_file_or_fallback(primary_path: PathBuf, fallback_path: PathBuf) -> Option<String> {
-//     if primary_path.exists() {
-//         fs::read_to_string(primary_path).ok()
-//     } else {
-//         fs::read_to_string(fallback_path).ok()
-//     }
-// }
-
-// main.rs
-
