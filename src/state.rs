@@ -9,6 +9,7 @@ use crate::syntax::markdown::{MarkDownStyle};
 
 /// Holds all “global” editor signals and the caret coroutine.
 /// Each `Signal<T>` is a reactive state that can be read or written.
+#[derive(Clone)]
 pub struct State {
     /// The main text buffer (e.g., Markdown, plain text, etc.)
     pub raw_text: Vec<Vec<String>>,
