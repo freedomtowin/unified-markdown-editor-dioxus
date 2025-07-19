@@ -5,6 +5,7 @@ mod handler;
 mod coroutines;
 mod syntax;
 
+use coroutines::update_editor_text_coroutine;
 use dioxus::prelude::*;
 use dioxus::events::Key;
 use dioxus::logger::tracing::info;
@@ -54,10 +55,16 @@ fn App() -> Element {
         None, // No UCI coroutine for now
         State::new(
             // vec![vec!["\tExample text for textarea 1".to_string(), "Example text for textarea 2".to_string()]],
-            input_text,
+            input_text.clone(),
             None,
-        ),
+        )
     ));
+
+    let mut visual_editor = use_signal(|| State::new(
+        // vec![vec!["\tExample text for textarea 1".to_string(), "Example text for textarea 2".to_string()]],
+        input_text,
+        None,
+    ).raw_text);
 
     let mut is_mouse_down = use_signal(|| false);
     let mut is_mouse_dragging = use_signal(|| false);
@@ -72,11 +79,78 @@ fn App() -> Element {
         coroutines::focus_caret_position_coroutine(rx, &mut editor).await;
     });
 
-    let update_editor_text = use_coroutine(move |mut rx: UnboundedReceiver<(usize, usize, usize, String)>| async move {
-        coroutines::update_editor_text_coroutine(rx, &mut editor).await;
+    
+    // Combined DOM updates queue for text and DOM operations
+    let mut dom_updates = use_signal(|| VecDeque::<(String, String, Option<String>)>::new());
+    
+    let update_editor_dom = use_coroutine(move |mut rx: UnboundedReceiver<(String, String, Option<String>)>| async move {
+        loop {
+            // Try to receive a message
+            match rx.try_next() {
+                Ok(Some((operation, id, data))) => {
+            match operation.as_str() {
+                "update_text" => {
+                    // Handle text updates - id format: "index_i,index_j,pos", data: text
+                    if let Some(text) = data {
+                        let parts: Vec<&str> = id.split(',').collect();
+                        if parts.len() == 3 {
+                            if let (Ok(index_i), Ok(index_j), Ok(pos)) = (
+                                parts[0].parse::<usize>(),
+                                parts[1].parse::<usize>(),
+                                parts[2].parse::<usize>()
+                            ) {
+                                // Call the original text update coroutine logic
+                                coroutines::update_editor_text_coroutine_single(index_i, index_j, pos, text, &mut editor).await;
+                            }
+                        }
+                    }
+                }
+                "delete_row" => {
+                    let js = format!(r#"return window.deleteRow('{}');"#, id);
+                    let _ = document::eval(&js).await;
+                }
+                "create_row" => {
+                    let insert_after = data.unwrap_or_default();
+                    let js = if insert_after.is_empty() {
+                        format!(r#"return window.createRow('{}');"#, id)
+                    } else {
+                        format!(r#"return window.createRow('{}', '{}');"#, id, insert_after)
+                    };
+                    let _ = document::eval(&js).await;
+                }
+                "delete_element" => {
+                    let js = format!(r#"return window.deleteElement('{}');"#, id);
+                    let _ = document::eval(&js).await;
+                }
+                "create_cell" => {
+                    if let Some(cell_data) = data {
+                        // Format: "row_id,text_content,cell_style"
+                        let parts: Vec<&str> = cell_data.split(',').collect();
+                        if parts.len() >= 3 {
+                            let row_id = parts[0];
+                            let text_content = parts[1];
+                            let cell_style = parts[2];
+                            let js = format!(r#"return window.createCell('{}', '{}', '{}', '{}');"#, 
+                                id, row_id, text_content, cell_style);
+                            let _ = document::eval(&js).await;
+                        }
+                    }
+                }
+                _ => {
+                    println!("Unknown DOM operation: {}", operation);
+                }
+            }
+        }
+        _ => {
+            tokio::time::sleep(Duration::from_micros(10)).await;
+        }
+        }
+    
+        
+    }
+    println!("update dom ended!!!!!!");
     });
 
-    let mut editor_updates = use_signal(|| VecDeque::<(usize, usize, usize, String)>::new());
 
     // let update_editor_text = move |index_i: usize, index_j: usize, cursor_pos: usize, new_text: String| {
         
@@ -105,18 +179,17 @@ fn App() -> Element {
     let _sync_task = use_coroutine(move |rx: UnboundedReceiver<()>| async move {
         // let mut files_container = files_container.clone(); // Clone the signal
         loop {
-            tokio::time::sleep(Duration::from_micros(100)).await;
-            if (*editor_updates.read()).len() > 0 {
+            tokio::time::sleep(Duration::from_micros(1)).await;
+            if (*dom_updates.read()).len() > 0 {
                 
-                if let Some((index_i, index_j, pos, text)) = (*editor_updates.write()).pop_front() {        
+                if let Some((operation, id, data)) = (*dom_updates.write()).pop_front() {        
    
-
-                    editor.with_mut(|e| e.move_caret(index_i, index_j, pos));
-                    measure_width.send((index_i, index_j, text.clone()));
-
-                    editor.with_mut(|e| e.update_text(index_i, index_j, text.clone()));
-                    update_editor_text.send((index_i, index_j, pos, text.clone()));
+                    // Process the DOM update
+                    update_editor_dom.send((operation, id, data));
+                    visual_editor.set(editor.read().raw_text.clone());
                 }
+
+
             }
 
             // println!("Updated files: {:?}", files_ref.md_file_paths);
@@ -184,28 +257,24 @@ fn App() -> Element {
         }
     };
 
-    // let change_text = move |index_i: usize, index_j: usize, cursor_pos: usize, new_text: String| {
+    async fn change_text(index_i: usize, index_j: usize, cursor_pos: usize, new_text: String) {
         
-    //     async move {
-    //         let element_id = get_element_id(index_i, index_j);
-    //         let text_b64 = general_purpose::STANDARD.encode(new_text.clone());
+        let element_id = get_element_id(index_i, index_j);
+        let text_b64 = general_purpose::STANDARD.encode(new_text.clone());
 
-    //         let js = format!(
-    //             r#"
-    //             return window.clearElementText('{}', atob("{}"), {});
-    //             "#,
-    //             element_id,
-    //             text_b64,
-    //             cursor_pos
-    //         );
+        let js = format!(
+            r#"
+            return window.clearElementText('{}', atob("{}"), {});
+            "#,
+            element_id,
+            text_b64,
+            cursor_pos
+        );
 
-    //         let _ = document::eval(&js).await;
+        let _ = document::eval(&js).await;
 
-    //         editor.write().update_text(index_i, index_j, new_text.clone());
-
-    //         editor.write().move_caret(index_i, index_j , cursor_pos);
-    //     }
-    // };
+        return;
+    };
 
 
 
@@ -215,7 +284,7 @@ fn App() -> Element {
         let element_id = get_element_id(index_i, index_j);
         
         spawn(async move {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
             let js = format!(
                 r#"
                 return window.focusElementAndSetCaret('{}', {});
@@ -229,6 +298,18 @@ fn App() -> Element {
             focus_caret_position.send((index_i, index_j));
             
         });
+    };
+
+    let delete_element = move |index_i: usize, index_j: usize| {
+        let element_id = get_element_id(index_i, index_j);
+        println!("[delete element] {index_i} {index_j}");
+        update_editor_dom.send(("delete_element".to_string(), element_id, None));
+    };
+
+    let delete_row = move |index_i: usize| {
+        let row_id = format!("textrow-{}", index_i);
+        println!("[delete row  ] {index_i}");
+        update_editor_dom.send(("delete_row".to_string(), row_id, None));
     };
 
     // use_effect(move || {
@@ -255,212 +336,43 @@ fn App() -> Element {
     );
 
     let handle_keydown_input = move |event: KeyboardEvent, index_i: usize, index_j: usize| {
+    
+    
         let element_id = format!("textarea-{}-{}", index_i, index_j);
     
+
+
         let cur_text = editor.read().get_raw_text_current();
 
         if event.key() == Key::Enter {
             event.stop_propagation();
             event.prevent_default();
 
-            let _ = handler::handle_enter_key(event, index_i, index_j, &editor, measure_width, editor_updates);
-        //     spawn(async move {
-        //         // tokio::time::sleep(Duration::from_millis(100)).await;
-        //         editor.with_mut(|e| {
-        //             let (caret_i, caret_j, caret_pos) = e.get_caret_pos().unwrap_or((index_i, index_j, 0));
-        //             if caret_i == index_i && caret_j == index_j {
-        //                 let current_text = e.raw_text[index_i][index_j].clone();
+            let _ = handler::handle_enter_key(event, index_i, index_j, &editor, measure_width, dom_updates);
 
-        //                 let (before, after) = current_text.split_at(caret_pos);
-
-        //                 e.update_text(index_i, index_j, before.to_string());
-        //                 e.raw_text.insert(index_i+1, vec![after.to_string()]);
-                        
-        //                 measure_width.send((index_i, index_j, before.to_string()));
-        //                 measure_width.send((index_i, index_j + 1, after.to_string()));
-
-        //                 // update_editor_text.send((index_i, index_j, before.len(), before.to_string()));
-        //                 // update_editor_text.send((index_i + 1, 0, after.len(), after.to_string()));
-        //                 editor_updates.write().push_back((index_i, index_j, before.len(), before.to_string()));
-        //                 editor_updates.write().push_back((index_i + 1, 0, after.len(), after.to_string()));
-                        
-        //             }
-        //         });
-        // });
         } else if event.key() == Key::ArrowLeft {
 
             println!("[left arrow] current text {}, len {}", cur_text, cur_text.len());
+
+            let _ = handler::handle_left_arrow(event, index_i, index_j, &editor, focus_element, focus_caret_position, get_editor_caret_position);
+
             // println!("[left arrow] current indx {}", indx_j);
-            spawn(async move {
-                
-
-                let (current_index_i, current_index_j, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 0));
-
-                let editor_pos = get_editor_caret_position(current_index_i, current_index_j).await;
-
-                if (current_index_i == index_i) && (current_index_j == index_j) {
-                    
-                    if let Some(e_pos) = editor_pos {
-
-
-                    editor.with_mut(|e| {
-                        
-                        let (new_index_i, new_index_j, new_pos) = if (e_pos == 0) && (index_j > 0) {
-                            // If the is a previous cell in the same row 
-                            (index_i, index_j - 1, e.raw_text[index_i][index_j - 1].len().saturating_sub(1))
-                        } else if (e_pos == 0) && (index_j == 0) && (index_i > 0){
-                            // If there is a previous row
-                            let prev_i = index_i - 1;
-                            let prev_j = e.raw_text[prev_i].len().saturating_sub(1);
-                            (prev_i, prev_j, e.raw_text[prev_i][prev_j].len())
-                        } else if e_pos > 0 {
-                            (index_i, index_j, e_pos - 1)
-                        }
-                        else {
-                            (index_i, 0, 0)
-                        };
-
-                        if (new_index_j != index_j) || (new_index_i != index_i){
-                            focus_element(new_index_i, new_index_j, new_pos);
-                        } else {
-                            focus_caret_position.send((new_index_i, new_index_j));
-                        }
-
-                    });
-                }
-
-                // let editor_text = get_editor_text(current_index_i, current_index_j).await;
-                // let current_text = editor.read().raw_text[current_index_i][current_index_j].to_string();
-                                                    
-                
-
-                    // println!("[handle keydown] {} {}", e_pos, current_caret_pos);
-
-                    // if (current_index_i == index_i) && (current_index_j == index_j) && (e_pos == current_caret_pos) {
-                    //     let (index_i, index_j, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 0));
-
-
-
-                    // }
-                }
-
-                
-
-                
-            });
         } else if event.key() == Key::ArrowRight {
 
-    
-            spawn(async move {
-                // tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = handler::handle_right_arrow(event, index_i, index_j, &editor, focus_element, focus_caret_position, get_editor_caret_position);
+        } else if event.key() == Key::ArrowUp {
 
-                
-                let (current_index_i, current_index_j, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 0));
+            let _ = handler::handle_up_arrow(event, index_i, index_j, &editor, focus_element, focus_caret_position, get_editor_caret_position);
+        } else if event.key() == Key::ArrowDown {
 
-                let editor_pos = get_editor_caret_position(current_index_i, current_index_j).await;
+            let _ = handler::handle_down_arrow(event, index_i, index_j, &editor, focus_element, focus_caret_position, get_editor_caret_position);
+        } else if event.key() == Key::Backspace {
 
-                if (current_index_i == index_i) && (current_index_j == index_j) {
-                    
-                    if let Some(e_pos) = editor_pos {
-
-                    editor.with_mut(|e| e.move_caret(index_i, index_j, e_pos));
-                        println!("[handle keydown] {} {}", e_pos, current_caret_pos);
-                        // if (current_index_i == index_i) && (current_index_j == index_j) && (e_pos == current_caret_pos) {
-                            
-                            let current_text_len = editor.read().get_raw_text_current().len().saturating_sub(1);
-                            let current_col_size = editor.read().raw_text[index_i].len().saturating_sub(1);
-                            let current_row_size = editor.read().raw_text.len().saturating_sub(1);
-            
-                            editor.with_mut(|e| {
-                                
-                                let (new_index_i, new_index_j, new_pos) = if (current_caret_pos > current_text_len) && (index_j < current_col_size) {
-                                    // If the is a previous cell in the same row 
-                                    (index_i, index_j + 1, 0)
-            
-                                } else if (current_caret_pos > current_text_len) && (index_j == current_col_size) && (index_i < current_row_size){
-                                    // If there is a next row
-                                    let next_i = index_i + 1;
-                                    let next_j = 0;
-                                    (next_i, next_j, 0)
-                                } else if current_caret_pos <= current_text_len + 1 {
-                                    (index_i, index_j, current_caret_pos + 1)
-                                }
-                                else {
-                                    (current_row_size, current_col_size, current_text_len)
-                                };
-            
-                                // e.move_caret(new_index_i, new_index_j, new_pos);
-                                let element_id = get_element_id(new_index_i, new_index_j);
-                                if (new_index_j != index_j) || (new_index_i != index_i){
-                                    focus_element(new_index_i, new_index_j, new_pos);
-                                } else {
-                                    focus_caret_position.send((new_index_i, new_index_j));
-                                }
-            
-                                info!("prev index: {:?}, new_pos {}", format!("textarea-{}-{}", new_index_i, new_index_j), new_pos);
-            
-                        });
-                    // }
-                
-                }
-                    // tokio::time::sleep(Duration::from_millis(100)).await;
-
-                    // focus_element(element_id, new_pos);
-                    
-                    // caret_click.send((new_index_i, new_index_j, element_id));
-                }
-
-            });
+            let _ = handler::handle_backspace(event, index_i, index_j, &editor, dom_updates, update_editor_dom, focus_element, 
+                delete_row,
+                get_editor_caret_position, get_editor_text);
         } else {
-
-            spawn(async move {
-
-
-            let editor_pos = get_editor_caret_position(index_i, index_j).await;
-            // if let Some(e_pos) = editor_pos {
-            //     editor.with_mut(|e| e.move_caret(index_i, index_j, e_pos));
-            // }
-            let editor_text = get_editor_text(index_i, index_j).await;
-
-            let (current_index_i, current_index_j, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 666));
-        
-            let current_text = editor.read().raw_text[current_index_i][current_index_j].to_string();
-
-            // update_editor_text.send((index_i, index_j, current_text.clone(), current_caret_pos));
-
-
-            if let Some(e_pos) = editor_pos {
-                // println!("[handle keydown] {} {}", e_pos, current_caret_pos);
-                if (e_pos as i32 - current_caret_pos as i32).abs() <= 5 {
-                    // tokio::time::sleep(Duration::from_millis(10)).await;
-                    // editor.with_mut(|e| e.move_caret(index_i, index_j, e_pos));
-                    // update_editor_text.send((index_i, index_j, current_text.clone(), current_caret_pos));
-                    
-
-                    if let Some(e_text) = editor_text {
-                        // update_editor_text.send((index_i, index_j, current_text.clone(), current_caret_pos));
-                        // caret_click.send((index_i, index_j, e_pos, e_text))
-                        update_editor_text.send((index_i, index_j, e_pos, e_text.clone()));
-                        editor_updates.write().push_back((index_i, index_j, e_pos, e_text));
-                    }
-
-                }
-                
-
-            }
-            //         let (_, _, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 667));
-            //         tokio::time::sleep(Duration::from_millis(50)).await;
-            //         println!("[handle keydown] {} {}", e_pos, current_caret_pos);
-            //  }
-            // }
-            
-            // let e = editor.read();
-            
-
-
-
-            });
-            // println!("{:?}", editor.read().raw_text);
+            let _ = handler::handle_character_input(event, index_i, index_j, &editor, dom_updates, update_editor_dom, get_editor_caret_position, get_editor_text);
         }
     };
     
@@ -470,7 +382,12 @@ fn App() -> Element {
     let update_syntax = move || {
         
         async move {
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            
+            while (*dom_updates.read()).len() > 0 {
+                println!("waiting for updates {}", (*dom_updates.read()).len());
+                tokio::time::sleep(Duration::from_micros(20)).await;
+            }
+
             let input_text = editor.read().raw_text.clone();
         
             // let editor_pos = get_editor_caret_position(index_i, index_j).await;
@@ -481,87 +398,162 @@ fn App() -> Element {
             // println!("{:?}", input_text);
             let text_processor = TextProcessor::new();
             let join_text = text_processor.markdown_to_string(input_text.clone());
-            let syntax_text = text_processor.process_markdown(join_text.clone());
-            let raw_text = text_processor.extract_strings(syntax_text.clone());
+            let syntax = text_processor.process_markdown(join_text.clone());
+            let syntax_text = text_processor.extract_strings(syntax.clone());
             
-            if input_text ==  raw_text {
+            // Compare rows and identify changes
+            let mut changed_rows = Vec::new();
+            let max_rows = input_text.len().max(syntax_text.len());
+
+            for row_idx in 0..max_rows {
+                let input_row = input_text.get(row_idx);
+                let syntax_row = syntax_text.get(row_idx);
+                
+                match (input_row, syntax_row) {
+                    (Some(input), Some(syntax)) => {
+                        // Both rows exist - compare them
+                        if input != syntax {
+                            changed_rows.push(row_idx);
+                        }
+                    }
+                    (None, Some(_)) => {
+                        // New row in syntax_text
+                        changed_rows.push(row_idx);
+                    }
+                    (Some(_), None) => {
+                        // Row removed in syntax_text
+                        changed_rows.push(row_idx);
+                    }
+                    (None, None) => {
+                        // Should not happen given our loop condition
+                        break;
+                    }
+                }
+            }
+
+            // Early return if no changes
+            if changed_rows.is_empty() {
                 return;
             }
-            // assert_eq!(input_text, raw_text);
-            // editor.write().raw_text = raw_text.clone();
-    
-            
-            if let Some((cur_index_i, cur_index_j, cur_caret_pos)) = maybe_current_caret {
 
+            // Process only changed rows
+            if let Some((cur_index_i, cur_index_j, cur_caret_pos)) = maybe_current_caret {
                 println!("[update syntax] index i {} index j {} cursor {}", cur_index_i, cur_index_j, cur_caret_pos);
                 
-                if cur_index_i >= editor.read().text_width.len() {
+                // Ensure text_width array is properly sized
+                while editor.read().text_width.len() <= cur_index_i {
                     editor.write().text_width.push(vec![None]);
-                }           
-
-                while cur_index_j >= editor.read().text_width[cur_index_i].len() - 1 {
-                    // editor.write().text_width
+                }
+                
+                while editor.read().text_width[cur_index_i].len() <= cur_index_j {
                     editor.write().text_width[cur_index_i].push(None);
                 }
                 
-                // This potentially needs to be robust
-                let mut cur_index_j = cur_index_j;
-                if cur_index_j > raw_text[cur_index_i].len() - 1 {
-                    cur_index_j = raw_text[cur_index_i].len() - 1;
-                }
-
-                println!("row {:?}", raw_text[cur_index_i]);
-                println!("{:?}", cur_index_j);
-                
-                let cur_text = raw_text[cur_index_i][cur_index_j].clone();
-
-                editor.write().raw_text[cur_index_i] = raw_text[cur_index_i].clone();
-                
-                
-                // let row_size = editor.write().raw_text[cur_index_i].len();
-                // for (copy_index_j, col) in raw_text[cur_index_i].iter().enumerate() {
-
-                //     editor_updates.write().push_back((cur_index_i, copy_index_j, col.len(), col.clone()));
-
-                //     if copy_index_j >= row_size {
-                //         editor.write().raw_text[cur_index_i].push(col.clone());
-                //     }
-                //     else {
-                //     editor.write().raw_text[cur_index_i][index_j] = col.clone();
-                //    }
-                // }
-                
-                measure_width.send((cur_index_i, cur_index_j, cur_text.to_string()));                
-
-                println!("current index text {} {} {:?}", cur_index_i, cur_index_j, cur_text);
-                
-                editor_updates.write().push_back((cur_index_i, cur_index_j, cur_caret_pos, cur_text));
-
-                if let Some(global_row_caret_pos) = row_level_caret_pos {
-                    let maybe_new_caret_pos = editor.read().get_caret_from_row_level_pos(global_row_caret_pos, cur_index_i, raw_text[cur_index_i].clone());
-    
+                // Only update if current row changed
+                if changed_rows.contains(&cur_index_i) && cur_index_i < syntax_text.len() {
+                    // Safely get column index
+                    let safe_cur_index_j = cur_index_j.min(syntax_text[cur_index_i].len().saturating_sub(1));
                     
-                    println!("new caret: {:?}", maybe_new_caret_pos);
-                    if let Some((index_i, index_j, char_pos)) = maybe_new_caret_pos {
-                        // editor.write().move_caret(index_i, index_j, char_pos);
-    
-                        let cur_text = raw_text[index_i][index_j].clone();
-    
-                        editor_updates.write().push_back((index_i, index_j, char_pos, cur_text));
+                    if !syntax_text[cur_index_i].is_empty() && safe_cur_index_j < syntax_text[cur_index_i].len() {
+                        let cur_text = syntax_text[cur_index_i][safe_cur_index_j].clone();
+                        
+                        println!("row {:?}", syntax_text[cur_index_i]);
+                        println!("{:?}", safe_cur_index_j);
+                        
+
+                        // Update the editor's raw_text for this row
+                        if cur_index_i < editor.read().raw_text.len() {
+                            let old_col_count = editor.read().raw_text[cur_index_i].len();
+                            let new_col_count = syntax_text[cur_index_i].len();
+                            
+                            // Clear columns that exceed the new column count
+                            if old_col_count > new_col_count {
+                                for col_idx in new_col_count..old_col_count {
+                                    delete_element(cur_index_i, col_idx);
+                                    // editor_updates.write().push_back((cur_index_i, col_idx, 0, String::new()));
+                                }
+
+                                focus_element(cur_index_i, new_col_count - 1, editor.read().raw_text[cur_index_i][new_col_count - 1].len() - 1);
+                            }
+                            
+                            editor.write().raw_text[cur_index_i] = syntax_text[cur_index_i].clone();
+                            let col_num = syntax_text[cur_index_i].len();
+                            if col_num > 1 {
+                                for col_indx in 0..col_num.saturating_sub(1) {
+                                    let prev_text = syntax_text[cur_index_i][col_indx].clone();
+                                    // Send to dom_updates instead of editor_updates
+                                    let id = format!("{},{},{}", cur_index_i, col_indx, prev_text.len());
+
+                                    let tmp_cursor_pos = prev_text.len();
+                                    editor.write().update_text(cur_index_i, col_indx, prev_text.clone());
+                                    editor.write().move_caret(cur_index_i, col_indx , tmp_cursor_pos);
+
+                                    dom_updates.write().push_back(("update_text".to_string(), id, Some(prev_text.clone())));
+  
+                                    measure_width.send((cur_index_i, col_indx, prev_text.clone()));
+                            
+                                    println!("current index text {} {} {:?} {}", cur_index_i, col_indx, prev_text, prev_text.len());
+                                }
+                            }
+                        }
+                        
+                        // Send updates
+                        // measure_width.send((cur_index_i, safe_cur_index_j, cur_text.to_string()));
+                        
+  
+                        
+                        // editor_updates.write().push_back((cur_index_i, safe_cur_index_j, cur_caret_pos, cur_text));
+                        
+                        // Handle caret positioning
+                        if let Some(global_row_caret_pos) = row_level_caret_pos {
+                            let maybe_new_caret_pos = editor.read().get_caret_from_row_level_pos(
+                                global_row_caret_pos, 
+                                cur_index_i, 
+                                syntax_text[cur_index_i].clone()
+                            );
+                            
+                            println!("new caret: {:?}", maybe_new_caret_pos);
+                            if let Some((index_i, index_j, char_pos)) = maybe_new_caret_pos {
+                                if index_i < syntax_text.len() && index_j < syntax_text[index_i].len() {
+                                    let cur_text = syntax_text[index_i][index_j].clone();
+                                    
+                                    editor.write().raw_text[index_i][index_j] = cur_text.clone();
+                                    
+                                    let tmp_cursor_pos = cur_text.len();
+                                    editor.write().update_text(index_i, index_j, cur_text.clone());
+                                    editor.write().move_caret(index_i, index_j , tmp_cursor_pos);
+                                    
+                                    // Send to dom_updates instead of editor_updates
+                                    let id = format!("{},{},{}", index_i, index_j, cur_text.len());
+                                    dom_updates.write().push_back(("update_text".to_string(), id, Some(cur_text.to_string())));
+
+                                    // focus_element(index_i, index_j, cur_text.len());
+                                }
+                            }
+                        }
                     }
                 }
             }
     
+            // while (*editor_updates.read()).len() > 0 {
+            //     println!("waiting for updates {}", (*editor_updates.read()).len());
+            //     tokio::time::sleep(Duration::from_micros(20)).await;
+            // }
+
+            visual_editor.set(editor.read().raw_text.clone());
+
             println!("input text: {:?}", input_text);
-            // println!("join text: {:?}", join_text);
-            println!("raw text: {:?}", raw_text);
+            println!("read text: {:?}", editor.read().raw_text);
+            println!("raw text: {:?}", syntax_text);
+
+            
         }
     };
 
     let renderer = use_memo(move || {
 
 
-        let input_text = editor.read().raw_text.clone();
+        let input_text = visual_editor.read().clone();
         
         let maybe_current_caret = editor.read().get_caret_pos();
         let row_level_caret_pos = editor.read().get_row_level_caret_pos(maybe_current_caret);
@@ -620,18 +612,15 @@ fn App() -> Element {
                 style: cell_style,
 
                 onkeydown: move |event| {
-                    if (*editor_updates.read()).len() < 20 { 
+                    if (*dom_updates.read()).len() < 20 { 
                         handle_keydown_input(event, row, col);
                     }
                     spawn(async move {
 
-                        while (*editor_updates.read()).len() > 0 {
-                            println!("waiting for updates {}", (*editor_updates.read()).len());
-                            tokio::time::sleep(Duration::from_millis(1)).await;
-                        }
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(Duration::from_micros(20)).await;
                         let _ = update_syntax().await;
                     });   
+                    
                 },
                 onmousedown: move |event| { is_mouse_down.set(true) },
                 onmousemove: move |event| {
@@ -667,6 +656,7 @@ fn App() -> Element {
                     rsx! {
                         div {
                             style: "display: flex; flex-direction: row; gap: 0; flex-wrap: wrap; font-size: 0;",
+                            id: "textrow-{row}",
                             {
                                 inner.iter().enumerate().map(move |(col, text)| {
                                     // Compute flat index for text_width
