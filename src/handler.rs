@@ -5,6 +5,7 @@ use std::f32::consts::E;
 use std::future::Future;
 use std::time::Duration;
 
+use super::coroutines;
 use crate::get_element_id;
 
 async fn get_editor_caret_position(index_i: usize, index_j: usize) -> Option<usize> {
@@ -74,35 +75,30 @@ pub fn handle_enter_key(
                 // Clear the columns after the current one in the current row
                 e.raw_text[index_i].truncate(index_j + 1);
                 
-                // Insert the new row
-                e.raw_text.insert(index_i + 1, new_row.clone());
-                
                 measure_width.send((index_i, index_j, before.to_string()));
                 measure_width.send((index_i + 1, 0, after.to_string()));
 
-                // Move caret to beginning of new row
-                e.move_caret(index_i + 1, 0, 0);
-
                 let id1 = format!("{},{},{}", index_i, index_j, before.len());
 
-                // DOM updates: update current cell, insert new row, then update ALL cells in new row
-                // e.update_text(index_i, index_j, before.to_string());
-                // e.move_caret(index_i, index_j , before.len());
-
-                // e.update_text(index_i + 1, 0 , after.to_string());
-                // e.move_caret(index_i + 1, 0 , after.len());
-
+                // DOM updates: update current cell, then create new row with all data
                 dom_updates.write().push_back(("update_text".to_string(), id1, Some(before.to_string())));
-                dom_updates.write().push_back(("create_row".to_string(), format!("textrow-{}", index_i + 1), Some(format!("textrow-{}", index_i))));
                 
-                
+
+
+                // Send create_row with all necessary data: index_i, index_j, new_row data
+                let create_row_data = format!("{}|{}|{}", index_i, index_j, serde_json::to_string(&new_row).unwrap_or_default());
+                dom_updates.write().push_back(("create_row".to_string(), format!("textrow-{}", index_i + 1), Some(create_row_data)));
+
                 // Update all columns in the new row
-                for (new_col_idx, col_content) in new_row.iter().enumerate() {
+                for (new_col_idx, col_content) in new_row.iter().enumerate().rev() {
                     let id = format!("{},{},{}", index_i + 1, new_col_idx, 0);
                     dom_updates.write().push_back(("update_text".to_string(), id, Some(col_content.clone())));
                 }
+                
                 let id = format!("{},{},{}", index_i + 1, 0, 0);
-                dom_updates.write().push_back(("update_text".to_string(), id, Some(after.to_string())));
+                dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some(new_row[0].to_string())));
+
+
             }
         });
     });
@@ -139,30 +135,33 @@ where
 
             editor.with_mut(|e| {
                 
-                let (new_index_i, new_index_j, new_pos) = if (e_pos == 0) && (index_j > 0) {
+                let (new_index_i, new_index_j, new_pos) = if (current_caret_pos == 0) && (index_j > 0) {
                     // If the is a previous cell in the same row 
                     (index_i, index_j - 1, e.raw_text[index_i][index_j - 1].len().saturating_sub(1))
-                } else if (e_pos == 0) && (index_j == 0) && (index_i > 0){
+                } else if (current_caret_pos == 0) && (index_j == 0) && (index_i > 0){
                     // If there is a previous row
                     let prev_i = index_i - 1;
                     let prev_j = e.raw_text[prev_i].len().saturating_sub(1);
                     (prev_i, prev_j, e.raw_text[prev_i][prev_j].len())
-                } else if e_pos > 0 {
-                    (index_i, index_j, e_pos - 1)
+                } else if current_caret_pos > 0 {
+                    (index_i, index_j, current_caret_pos - 1)
                 }
                 else {
                     (index_i, 0, 0)
                 };
 
                 if (new_index_j != index_j) || (new_index_i != index_i){
+                    focus_caret_position.send((new_index_i, new_index_j));
                     focus_element(new_index_i, new_index_j, new_pos);
                 } else {
                     focus_caret_position.send((new_index_i, new_index_j));
+                    focus_element(new_index_i, new_index_j, new_pos);
                 }
-
             });
         }
 
+        } else {
+            println!("({current_index_i} != {index_i}) && ({current_index_j} != {index_j})")
         }
     });
 
@@ -190,37 +189,38 @@ where
         let (current_index_i, current_index_j, current_caret_pos) = editor.read().get_caret_pos().unwrap_or((index_i, index_j, 0));
 
         let editor_pos = get_editor_caret_position(current_index_i, current_index_j).await;
+        // let editor_pos = Some(current_caret_pos);
 
         if (current_index_i == index_i) && (current_index_j == index_j) {
             
             if let Some(e_pos) = editor_pos {
 
-                editor.with_mut(|e| e.move_caret(index_i, index_j, e_pos));
+                // editor.with_mut(|e| e.move_caret(index_i, index_j, e_pos));
 
-                let current_text_len = editor.read().get_raw_text_current().len().saturating_sub(1);
-                let current_col_size = editor.read().raw_text[index_i].len().saturating_sub(1);
-                let current_row_size = editor.read().raw_text.len().saturating_sub(1);
+                let current_text_len = editor.read().get_raw_text_current().len();
+                let current_col_size = editor.read().raw_text[index_i].len();
+                let current_row_size = editor.read().raw_text.len();
                 println!("[handle keydown] {} {} {}", e_pos, current_caret_pos, current_text_len);
                 
                 editor.with_mut(|e| {
                     
-                    let (new_index_i, new_index_j, new_pos) = if (current_caret_pos > current_text_len) && (index_j < current_col_size) {
-                        // If there is a next cell in the same row 
+                    let (new_index_i, new_index_j, new_pos) = if (current_caret_pos >= current_text_len) && (index_j < current_col_size - 1) {
+                        // Move to next column in same row
                         (index_i, index_j + 1, 0)
-
-                    } else if (current_caret_pos > current_text_len) && (index_j == current_col_size) && (index_i < current_row_size){
-                        // If there is a next row
-                        let next_i = index_i + 1;
-                        let next_j = 0;
-                        (next_i, next_j, 0)
-                    } else if current_caret_pos <= current_text_len + 1 {
+                    } else if (current_caret_pos >= current_text_len) && (index_j == current_col_size - 1) && (index_i < current_row_size - 1) {
+                        // Move to first column of next row
+                        (index_i + 1, 0, 0)
+                    } else if current_caret_pos < current_text_len {
+                        // Move cursor forward within same cell
                         (index_i, index_j, current_caret_pos + 1)
-                    }
-                    else {
-                        (current_row_size, current_col_size, current_text_len)
+                    } else {
+                        // Stay at the end (or handle edge case)
+                        (index_i, index_j, current_text_len)
                     };
 
+                    println!("new index i {index_i}, new pos {:?}", new_pos);
                     if (new_index_j != index_j) || (new_index_i != index_i){
+                        focus_caret_position.send((new_index_i, new_index_j));
                         focus_element(new_index_i, new_index_j, new_pos);
                     } else {
                         focus_caret_position.send((new_index_i, new_index_j));
@@ -229,6 +229,11 @@ where
 
                 });
             }
+        } else {
+
+            // editor.with_mut(|e| e.move_caret(index_i, index_j, current_caret_pos));
+
+            println!("({current_index_i} != {index_i}) && ({current_index_j} != {index_j})")
         }
     });
 
@@ -408,17 +413,14 @@ where
         let e_pos = current_caret_pos;
         let e_text = current_text;
         
-        // Check if cursor is at beginning of a cell
-        if e_pos == 0 {
-            
-            if index_i > 0 {
-                // Move row up: merge current row with previous row
-                
-                editor.with_mut(|e| {
-                    let prev_i = index_i - 1;
-                    let current_row = e.raw_text[index_i].clone();
-                    println!("[pos=0 and i>0 and j==0 and key event]");
-                    if index_j == 0 {
+        // let mut editor = editor.clone();
+        // Handle different backspace scenarios
+        if e_pos == 0 && index_i > 0 && index_j == 0 {
+            // Move row up: merge current row with previous row
+            editor.with_mut(|e| {
+                let prev_i = index_i - 1;
+                let current_row = e.raw_text[index_i].clone();
+                println!("[pos=0 and i>0 and j==0 and key event]");
                         // When at the first column, merge entire row and clear the text that was moved
                         // Determine where to place the cursor: last column if previous row has multiple columns
                         let cursor_col_idx = if e.raw_text[prev_i].len() > 1 {
@@ -436,68 +438,125 @@ where
                         };
                         
                         
+                        // M erge all columns from current row into previous row
+                        // for (col_idx, col_content) in current_row.iter().enumerate() {
+                        //     e.raw_text[prev_i].push(col_content.to_string())
 
-                        // Merge all columns from current row into previous row
-                        for (col_idx, col_content) in current_row.iter().enumerate() {
-                            e.raw_text[prev_i][cursor_col_idx].push_str(col_content)
+                        // }
+                        
+                        let mut prev_len = 0usize;
+                        let mut cur_text = String::new();
+                        for (col_idx, col_content) in e.raw_text[prev_i].iter().enumerate() {
+                            cur_text.push_str(col_content);
+
+                            prev_len += col_content.len();
 
                         }
+                        
 
-                        let cur_text = e.raw_text[prev_i][cursor_col_idx].to_string();
-                        // let tmp_cursor_pos = 0;
-                        // e.update_text(index_i, index_j, cur_text.clone());
-                        // e.move_caret(index_i, index_j , tmp_cursor_pos);
-
-                        let id = format!("{},{},{}", prev_i, 0, prev_content_len);
-                        dom_updates.write().push_back(("update_text".to_string(), id, Some(cur_text)));
-                        
-                        // Remove current row by emptying it
-                        e.raw_text.remove(index_i);
-                        
-                        dom_updates.write().push_back(("delete_row".to_string(), format!("textrow-{}", index_i), None));
-                        
-                        // Focus on the cursor column at the merge point
-                        // focus_element(prev_i, cursor_col_idx, prev_content_len);
-                    } else {
-                        println!("[pos=0 and i>0 and j>0 key event]");
-                        // When not at the first column, just clear the current cell and move cursor
-                        let tmp_cursor_pos = 0;
-                        e.update_text(index_i, index_j, "".to_string());
-                        e.move_caret(index_i, index_j , 0);
-
-                        let id = format!("{},{},{}", index_i, index_j, 0);
-                        dom_updates.write().push_back(("update_text".to_string(), id, Some("".to_string())));
-                        // Move to the previous column
-                        let prev_j = index_j - 1;
-                        let prev_col_len = e.raw_text[index_i][prev_j].len();
-                        
-                        focus_element(index_i, prev_j, prev_col_len);
-                    }
-                });
+                        let mut new_row = e.raw_text[prev_i].clone();
                 
-            } else if index_j > 0 {
-                // Move to previous column and delete a character
-                println!("[else pos=0 and j>0 key event]");
-                editor.with_mut(|e| {
-                    let prev_j = index_j - 1;
-                    
-                    let tmp_cursor_pos = 0;
-                    e.update_text(index_i, index_j, "".to_string());
-                    e.move_caret(index_i, index_j , 0);
+                        // Add all columns after the current one to the new row
+                        for col_idx in 0..current_row.len() {
+                            new_row.push(current_row[col_idx].clone());
+                        }
+                        println!("current row {:?}", current_row);
+                        println!("new row {:?}", new_row);
+                        
+                        // Send create_row with all necessary data: index_i, index_j, new_row data
+                        let create_row_data = format!("{}|{}", prev_i, serde_json::to_string(&new_row).unwrap_or_default());
+                        dom_updates.write().push_back(("update_row".to_string(), format!("textrow-{}", prev_i), Some(create_row_data)));
 
-                    let id = format!("{},{},{}", index_i, index_j, 0);
-                    dom_updates.write().push_back(("update_text".to_string(), id, Some("".to_string())));
-                    
-                    // Get the new cursor position (end of previous column)
-                    let new_pos = e.raw_text[index_i][prev_j].len();
-                    
-                    // Focus on the previous column at the end
-                    focus_element(index_i, prev_j, new_pos);
-                });
-            } else {
-                println!("[else pos=0 key event]");
-                // Normal text sync for regular backspace
-            }
+
+                        // // M erge all columns from current row into previous row
+                        // for (col_idx, col_content) in current_row.iter().enumerate() {
+                        //     cur_text.push_str(col_content);
+
+                        // }
+                        
+                        // e.raw_text[prev_i] = vec![cur_text.to_string()];
+                        // let old_col_count = e.raw_text[prev_i].len();
+                        // if old_col_count > 1 {
+                        //     for col_idx in 1..old_col_count {
+                        //         // delete_element(cur_index_i, col_idx);
+
+                        //         let element_id = get_element_id(prev_i, col_idx);
+                        //         println!("[delete element] {prev_i} {col_idx}");
+
+                        //         let delete_payload = format!("{},{}", prev_i, col_idx);
+                        //     //         dom_updates.write().push_back(("delete_element".to_string(), element_id, Some(delete_payload)));
+
+                        //         // update_editor_dom.send(("delete_element".to_string(), element_id, Some(delete_payload)));
+                        //         dom_updates.write().push_back(("update_text".to_string(), element_id, Some("".to_string())));
+                        //         // dom_updates.write().push_back(("delete_element".to_string(), element_id, Some(delete_payload)));
+                        //         // editor_updates.write().push_back((cur_index_i, col_idx, 0, String::new()));
+                        //     }
+
+                        //     // focus_element(cur_index_i, new_col_count - 1, editor.read().raw_text[cur_index_i][new_col_count - 1].len() - 1);
+                        // }
+
+                        // e.raw_text[prev_i] = vec!["".to_string()];
+                        // let id = format!("{},{},{}", prev_i, 0, prev_len);
+                        // dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some(cur_text.to_string().clone())));
+
+                        // 
+
+                        // let cur_text = e.raw_text[prev_i][cursor_col_idx].to_string();
+
+
+                        // Focus on the cursor column at the merge point
+                        
+                        // Send delete_row with just the index_i - the DOM update will handle the rest
+                        dom_updates.write().push_back(("delete_row".to_string(), format!("textrow-{}", index_i), Some(index_i.to_string())));
+
+                        
+                        // focus_element(prev_i, cursor_col_idx, prev_content_len);
+
+                        // let id = format!("{},{},{}", prev_i, cursor_col_idx, prev_content_len);
+                        // dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some("".to_string())));
+
+
+                        
+            });
+        } else if e_pos == 0 && index_i > 0 && index_j > 0 {
+            // When not at the first column, just clear the current cell and move cursor
+            println!("[pos=0 and i>0 and j>0 key event]");
+            // let id = format!("{},{},{}", index_i, index_j, 0);
+            // dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some("".to_string())));
+            // Move to the previous column
+            // let prev_j = index_j - 1;
+            // let prev_col_len = editor.read().raw_text[index_i][prev_j].len();
+            // focus_element(index_i, prev_j, prev_col_len);
+
+        } else if e_pos == 1 && index_j > 0 {
+            // Move to previous column and delete a character
+            println!("[else pos=1 and j>0 key event]");
+            editor.with_mut(|e| {
+                let prev_j = index_j - 1;
+                
+
+
+                let mut prev_text = e.raw_text[index_i][prev_j].clone();
+                let mut cur_text = e_text.clone();
+                cur_text.remove(e_pos - 1);
+
+                prev_text.push_str(&cur_text);
+
+                // Get the new cursor position (end of previous column)
+                let new_pos = prev_text.len();
+
+                let id = format!("{},{},{}", index_i, index_j, 0);
+                dom_updates.write().push_back(("update_text".to_string(), id, Some("".to_string())));
+
+                // Focus on the previous column at the end
+                let id = format!("{},{},{}", index_i, prev_j, new_pos);
+                dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some(prev_text.to_string())));
+
+                
+            });
+        } else if e_pos == 0 {
+            println!("[else pos=0 key event]");
+            // Normal text sync for regular backspace
         } else {
             println!("default");
             // Normal backspace: delete character at cursor position
@@ -507,19 +566,11 @@ where
                 let new_caret_pos = e_pos - 1;
                 println!("new_caret_pos {:?}", new_caret_pos);
                 // Update editor state
-                editor.with_mut(|e| {
-                    if current_index_i < e.raw_text.len() && current_index_j < e.raw_text[current_index_i].len() {
-                        e.raw_text[current_index_i][current_index_j] = cur_text.clone();
-                        e.move_caret(current_index_i, current_index_j, new_caret_pos);
-                    }
-                });
-                
-                // let tmp_cursor_pos = cur_text.len();
-                editor.write().update_text(current_index_i, current_index_j, cur_text.clone());
-                editor.write().move_caret(current_index_i, current_index_j , new_caret_pos);
+
 
                 let id = format!("{},{},{}", current_index_i, current_index_j, new_caret_pos);
-                dom_updates.write().push_back(("update_text".to_string(), id, Some(cur_text)));
+                // dom_updates.write().push_back(("update_text".to_string(), id.clone(), Some(cur_text.clone())));
+                dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some(cur_text)));
             }
         }
     });
@@ -569,20 +620,15 @@ where
                     let new_caret_pos = caret_pos + char_str.len();
                     
                     // Update editor state
-                    editor.with_mut(|e| {
-                        if current_index_i < e.raw_text.len() && current_index_j < e.raw_text[current_index_i].len() {
-                            e.raw_text[current_index_i][current_index_j] = cur_text.clone();
-                            e.move_caret(current_index_i, current_index_j, new_caret_pos);
-                        }
-                    });
-                    
-                    // Send updates
-                    let tmp_cursor_pos = cur_text.len();
-                    editor.write().update_text(current_index_i, current_index_j, cur_text.clone());
-                    editor.write().move_caret(current_index_i, current_index_j , tmp_cursor_pos);
+                    // editor.with_mut(|e| {
+                    //     if current_index_i < e.raw_text.len() && current_index_j < e.raw_text[current_index_i].len() {
+                    //         e.raw_text[current_index_i][current_index_j] = cur_text.clone();
+                    //         e.move_caret(current_index_i, current_index_j, new_caret_pos);
+                    //     }
+                    // });
 
                     let id = format!("{},{},{}", current_index_i, current_index_j, new_caret_pos);
-                    dom_updates.write().push_back(("update_text".to_string(), id, Some(cur_text)));
+                    dom_updates.write().push_back(("update_text_cursor".to_string(), id, Some(cur_text)));
                 }
             });
         }

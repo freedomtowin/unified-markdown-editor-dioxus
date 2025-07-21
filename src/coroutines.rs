@@ -102,10 +102,10 @@ pub async fn focus_caret_position_coroutine(mut rx: UnboundedReceiver<(usize, us
             }
             Ok(None) => {
                 // No messages available, wait for a short time before trying again
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
             Err(_) => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
                 // Channel is closed, exit the loop
                 // println!("Channel closed");
                 // break;
