@@ -25,6 +25,8 @@ window.getElementText = function (element_id = '') {
 }
 
 window.deleteElement = function (element_id = '') {
+    const container = document.getElementById('container');
+    container.blur();
     const element = document.getElementById(element_id);
     if (element) {
         element.remove();
@@ -38,8 +40,10 @@ window.deleteElement = function (element_id = '') {
 window.clearElementText = function (element_id = '', text_content = '') {
     // Get the element by ID
     const element = document.getElementById(element_id);
-
+    element.blur()
     element.textContent = text_content;
+    element.blur()
+
 }
 
 window.clearElementTextWithPosition = function (element_id = '', text_content = '', caretPos) {
@@ -151,7 +155,7 @@ window.focusElementAndSetCaret = function (elementId, caretPos) {
     }
   };
 
-window.deleteRow = function (row_id = '') {
+window.deleteRow = function (row_id = '', newRowsData = null) {
     const row = document.getElementById(row_id);
     if (row) {
         // Extract row index from row_id (format: textrow-N)
@@ -178,6 +182,15 @@ window.deleteRow = function (row_id = '') {
                             const oldCellIndex = parseInt(parts[1]);
                             if (oldCellIndex === currentIndex) {
                                 cell.id = `textarea-${currentIndex - 1}-${parts[2]}`;
+                                
+                                // Update cell content if new data is provided
+                                if (newRowsData && newRowsData[currentIndex - 1 - deletedRowIndex]) {
+                                    const rowData = newRowsData[currentIndex - 1 - deletedRowIndex];
+                                    const colIndex = parseInt(parts[2]);
+                                    if (rowData[colIndex] !== undefined) {
+                                        cell.textContent = rowData[colIndex];
+                                    }
+                                }
                             }
                         }
                     }
@@ -192,54 +205,126 @@ window.deleteRow = function (row_id = '') {
 };
 
 window.createRow = function (row_id = '', insertAfter = null) {
-    const newRow = document.createElement('div');
-    newRow.id = row_id;
-    newRow.style.cssText = 'display: flex; flex-direction: row; gap: 0; flex-wrap: wrap; font-size: 0;';
-    
-    const container = document.getElementById('container');
-    if (container) {
-        // Extract row index from row_id (format: textrow-N)
-        const newRowIndex = parseInt(row_id.split('-')[1]);
-        
-        if (insertAfter) {
-            const afterElement = document.getElementById(insertAfter);
-            if (afterElement && afterElement.nextSibling) {
-                container.insertBefore(newRow, afterElement.nextSibling);
-            } else {
-                container.appendChild(newRow);
-            }
-        } else {
-            container.appendChild(newRow);
-        }
-        
-        // Renumber all subsequent rows and their cells
-        const allRows = container.querySelectorAll('[id^="textrow-"]');
-        for (let row of allRows) {
-            const currentIndex = parseInt(row.id.split('-')[1]);
-            if (currentIndex > newRowIndex) {
-                const oldRowId = row.id;
-                const newRowId = `textrow-${currentIndex + 1}`;
-                row.id = newRowId;
-                
-                // Update all cells in this row
-                const cells = row.querySelectorAll('[id^="textarea-"]');
-                for (let cell of cells) {
-                    const parts = cell.id.split('-');
-                    if (parts.length === 3) {
-                        const oldCellIndex = parseInt(parts[1]);
-                        if (oldCellIndex === currentIndex) {
-                            cell.id = `textarea-${currentIndex + 1}-${parts[2]}`;
-                        }
-                    }
-                }
-            }
-        }
-        
-        console.log(`Created row: ${row_id}`);
-    } else {
-        console.warn('Container not found');
-    }
-    return newRow;
+  const container = document.getElementById('container');
+  if (!container) {
+      console.warn('Container not found');
+      return null;
+  }
+
+  // Extract row index from row_id (format: textrow-N)
+  const newRowIndex = row_id ? parseInt(row_id.split('-')[1]) : 0;
+
+  // Check for existing row with the same ID and remove it
+  const existingRow = document.getElementById(row_id);
+  if (existingRow) {
+      existingRow.remove();
+      console.log(`Removed existing row: ${row_id}`);
+  }
+
+  // Create new row
+  const newRow = document.createElement('div');
+  newRow.id = row_id;
+  newRow.style.cssText = 'display: flex; flex-direction: row; gap: 0; flex-wrap: wrap; font-size: 0;';
+
+  // Insert the new row
+  if (insertAfter) {
+      const afterElement = document.getElementById(insertAfter);
+      if (afterElement && afterElement.nextSibling) {
+          container.insertBefore(newRow, afterElement.nextSibling);
+      } else {
+          container.appendChild(newRow);
+      }
+  } else {
+      container.appendChild(newRow);
+  }
+
+  // Renumber all rows to ensure consecutive IDs
+  const allRows = Array.from(container.querySelectorAll('[id^="textrow-"]')).sort((a, b) => {
+      const aIndex = parseInt(a.id.split('-')[1]) || 0;
+      const bIndex = parseInt(b.id.split('-')[1]) || 0;
+      return aIndex - bIndex;
+  });
+
+  // Update row IDs and their cells
+  for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
+      const currentIndex = parseInt(row.id.split('-')[1]) || 0;
+      const newRowId = `textrow-${i}`;
+      
+      if (row.id !== newRowId) {
+          row.id = newRowId;
+          // Update all cells in this row
+          const cells = row.querySelectorAll('[id^="textarea-"]');
+          for (let cell of cells) {
+              const parts = cell.id.split('-');
+              if (parts.length === 3) {
+                  cell.id = `textarea-${i}-${parts[2]}`;
+              }
+          }
+      }
+  }
+
+  // Remove empty rows (except the new row if it's empty)
+  for (let row of allRows) {
+      if (row.id !== row_id && row.children.length === 0) {
+          row.remove();
+          console.log(`Removed empty row: ${row.id}`);
+      }
+  }
+
+  console.log(`Created row: ${row_id}`);
+  return newRow;
+};
+
+window.createRow = function (row_id = '', insertAfter = null) {
+  const newRow = document.createElement('div');
+  newRow.id = row_id;
+  newRow.style.cssText = 'display: flex; flex-direction: row; gap: 0; flex-wrap: wrap; font-size: 0;';
+  
+  const container = document.getElementById('container');
+  if (container) {
+      // Extract row index from row_id (format: textrow-N)
+      const newRowIndex = parseInt(row_id.split('-')[1]);
+      
+      if (insertAfter) {
+          const afterElement = document.getElementById(insertAfter);
+          if (afterElement && afterElement.nextSibling) {
+              container.insertBefore(newRow, afterElement.nextSibling);
+          } else {
+              container.appendChild(newRow);
+          }
+      } else {
+          container.appendChild(newRow);
+      }
+      
+      // Renumber all subsequent rows and their cells
+      const allRows = container.querySelectorAll('[id^="textrow-"]');
+      for (let row of allRows) {
+          const currentIndex = parseInt(row.id.split('-')[1]);
+          if (currentIndex > newRowIndex) {
+              const oldRowId = row.id;
+              const newRowId = `textrow-${currentIndex + 1}`;
+              row.id = newRowId;
+              
+              // Update all cells in this row
+              const cells = row.querySelectorAll('[id^="textarea-"]');
+              for (let cell of cells) {
+                  const parts = cell.id.split('-');
+                  if (parts.length === 3) {
+                      const oldCellIndex = parseInt(parts[1]);
+                      if (oldCellIndex === currentIndex) {
+                          cell.id = `textarea-${currentIndex + 1}-${parts[2]}`;
+                      }
+                  }
+              }
+          }
+      }
+      
+      console.log(`Created row: ${row_id}`);
+  } else {
+      console.warn('Container not found');
+  }
+  return newRow;
 };
 
 window.createCell = function (element_id = '', row_id = '', text_content = '', cellStyle = '') {
@@ -258,4 +343,28 @@ window.createCell = function (element_id = '', row_id = '', text_content = '', c
         console.warn(`Row with id '${row_id}' not found`);
     }
     return cell;
+};
+
+window.updateRow = function (row_id = '', rowData = []) {
+    const row = document.getElementById(row_id);
+    if (!row) {
+        console.warn(`Row with id '${row_id}' not found`);
+        return;
+    }
+    
+    // Clear existing cells in the row
+    row.innerHTML = '';
+    
+    // Create new cells with the provided data
+    for (let col_idx = 0; col_idx < rowData.length; col_idx++) {
+        const cell = document.createElement('div');
+        cell.id = `textarea-${row_id.split('-')[1]}-${col_idx}`;
+        cell.contentEditable = true;
+        cell.className = 'base-paragraph';
+        // cell.style.cssText = 'display: flex; flex-direction: row; gap: 0; flex-wrap: wrap; font-size: 0;';
+        cell.textContent = rowData[col_idx];
+        row.appendChild(cell);
+    }
+    
+    console.log(`Updated row: ${row_id} with ${rowData.length} columns`);
 };
