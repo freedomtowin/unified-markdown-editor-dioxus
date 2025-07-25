@@ -75,6 +75,7 @@ fn App() -> Element {
         coroutines::measure_width_coroutine(rx, &mut editor).await;
     });
 
+    // Swap names with focus_element
     let focus_caret_position = use_coroutine(move |rx: UnboundedReceiver<(usize, usize)>| async move {
         coroutines::focus_caret_position_coroutine(rx, &mut editor).await;
     });
@@ -329,7 +330,7 @@ fn App() -> Element {
                                     measure_width.send((index_i, index_j, cur_text.clone()));
 
                                     let id = format!("{},{},{}", index_i, index_j, char_pos);
-                                    dom_updates.write().push_back(("focus_text".to_string(), id, Some("".to_string())));
+                                    dom_updates.write().push_back(("focus_element".to_string(), id, Some("".to_string())));
 
                                     focus_element(index_i, index_j, char_pos);
                                 }
